@@ -8,6 +8,12 @@ impl Launcher {
     /// Whether the screen covers the window: no owner, and either Play was refused or the player
     /// hasn't read it yet. The data question comes first.
     pub(crate) fn asking_owner(&self) -> bool {
+        // Single-player fork: nothing covers the window asking for Microsoft. Sign-in stays
+        // available in Settings for whoever wants an online account; it is never a condition
+        // for playing (`account::allow_offline_play`).
+        if account::allow_offline_play() {
+            return false;
+        }
         (self.owner_shown() == Some(false) || sign_in_preview())
             && (self.owner_screen_open || !self.settings.owner_notice_seen || sign_in_preview())
             && !self.asking_consent()
@@ -18,7 +24,8 @@ impl Launcher {
     /// an owner (`dev_options`) hides the gate, as if the keychain hadn't answered yet.
     pub(crate) fn owner_shown(&self) -> Option<bool> {
         match self.owner {
-            Some(false) if self.settings.dev_offline => None,
+            // Single-player fork: the gate never shows; the window opens straight to Home.
+            Some(false) if self.settings.dev_offline || account::allow_offline_play() => None,
             owner => owner,
         }
     }

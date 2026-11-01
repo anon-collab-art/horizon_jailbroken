@@ -1438,9 +1438,12 @@ fn download_for_owner(
     fetch: sources::Fetch,
     log: &dyn Fn(String),
 ) -> Result<(), String> {
+    // The strict gate, never `launch_for_game`: the option that lets offline names play without
+    // an owner must not download the game for them. Single-player fork: this build plays from the
+    // player's own Minecraft folder, so Mojang's downloads keep asking for a signed-in account
+    // that owns the game — nothing here is loosened, and no Microsoft request is made to start
+    // the game itself (`account::launch_for_game`).
     let mut accounts = account::Accounts::load();
-    // The strict gate, never `launch_for_game`: the developer option that lets offline names
-    // play without an owner must not download the game for them.
     let pass = account::launch(
         &account::Endpoints::live(),
         account::client_id().as_deref(),
@@ -2375,9 +2378,9 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
 
 /// The client's command, once the owner gate lets it start and its resources are prepared. Past
 /// the gate, a sign-in that can't be renewed (no network, expired) still lets the game start,
-/// offline.
+/// offline. In this single-player build the gate lets every start through (`account::launch_for_game`).
 pub fn client(tag: &str) -> Result<Command, String> {
-    let (session, offline) = account::session_for_game(&game_home(), false)
+    let (session, offline) = account::session_for_game(&game_home(), account::allow_offline_play())
         .map_err(|refused| format!("{refused} Sign in with `horizon-launcher account sign-in`."))?;
     need_prepared(tag)?;
     complete_assets(tag);
@@ -3329,7 +3332,17 @@ pub struct Settings {
 
 impl Settings {
     pub fn load() -> Self {
-        Self::parse(&fs::read_to_string(data_dir().join("settings.json")).unwrap_or_default())
+        let mut settings =
+            Self::parse(&fs::read_to_string(data_dir().join("settings.json")).unwrap_or_default());
+        // Single-player fork: offline play is on for this build, and it stays on in the saved
+        // file. Nothing asks Microsoft before the game starts; the sign-in screens never cover
+        // the window (`owner_page::asking_owner`, `account::launch_for_game`). Written once, then
+        // left alone: every other setting saves exactly as it always did.
+        if account::allow_offline_play() && !settings.dev_offline {
+            settings.dev_offline = true;
+            settings.save();
+        }
+        settings
     }
     pub fn parse(text: &str) -> Self {
         let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {

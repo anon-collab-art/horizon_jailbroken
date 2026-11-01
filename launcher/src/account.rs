@@ -1105,7 +1105,8 @@ impl Accounts {
                 self.selected = Some(uuid);
             }
             Player::Offline(name) => {
-                if !offline_without_owner && !self.has_owner(store) {
+                // Single-player fork: an offline name plays on its own, with no account behind it.
+                if !offline_without_owner && !allow_offline_play() && !self.has_owner(store) {
                     return Err(OFFLINE_NEEDS_OWNER.into());
                 }
                 let name = self.add_offline(&name)?;
@@ -1303,10 +1304,46 @@ pub fn launch(
     }
 }
 
-/// The owner gate before the game starts. With the window's hidden developer option
-/// (`backend::Settings::dev_offline`, `offline_without_owner`) no owner is no refusal: the game
-/// starts offline, without a session and without an `owner`. Downloads never come through here:
-/// `backend::download_for_owner` asks [`launch`] itself, so the option never downloads the game.
+// ----- Single-player fork: the Microsoft requirement removed ------------------------------------
+//
+// This is a private build for playing single player on one PC with the player's own local
+// Minecraft files. Every gate that asked for a Microsoft account that owns Minecraft: Java
+// Edition is open here: the game starts as an offline name, with no sign-in and no network round
+// trip to Microsoft, Xbox Live or Mojang's services.
+//
+// What this does *not* touch, on purpose:
+//   * The Microsoft sign-in code above stays in place. It is simply never required to play, so a
+//     later upstream merge can't silently bring the gate back through some other path.
+//   * Downloads from Mojang still ask the strict owner gate (`launch`, called by
+//     `backend::download_for_owner`). Nothing was loosened there: this build only plays from the
+//     player's own install (the folder Settings points at, `--minecraft-dir`, or
+//     `HORIZON_MINECRAFT_DIR`), which is what it was made for.
+
+/// Whether the launcher must start the game without asking any account service first. True for
+/// every run of this build; `HORIZON_REQUIRE_MS_ACCOUNT=1` puts the original gates back (useful
+/// to compare against upstream behaviour).
+pub fn allow_offline_play() -> bool {
+    fn set(v: &str) -> bool {
+        !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        )
+    }
+    match std::env::var("HORIZON_REQUIRE_MS_ACCOUNT") {
+        Ok(v) => !set(&v),
+        Err(_) => match std::env::var("HORIZON_OFFLINE_PLAY") {
+            Ok(v) => set(&v),
+            Err(_) => true,
+        },
+    }
+}
+
+/// The owner gate before the game starts. In this build the game always starts: with no account
+/// that owns the game the pass is the offline one — no session, no `owner` — exactly what the
+/// window's hidden developer option used to give. A signed-in account whose token renews still
+/// gets its session file, so online servers keep working when someone signs in by hand.
+/// Downloads never come through here: `backend::download_for_owner` asks [`launch`] itself, so
+/// nothing is ever downloaded for a player who has not signed in.
 pub fn launch_for_game(
     ep: &Endpoints,
     client_id: Option<&str>,
@@ -1315,7 +1352,7 @@ pub fn launch_for_game(
     offline_without_owner: bool,
 ) -> Result<Launch, NoOwner> {
     match launch(ep, client_id, store, accounts) {
-        Err(NoOwner) if offline_without_owner => Ok(Launch::default()),
+        Err(NoOwner) if offline_without_owner || allow_offline_play() => Ok(Launch::default()),
         pass => pass,
     }
 }
